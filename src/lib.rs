@@ -1,5 +1,6 @@
 extern crate byteorder;
 
+use std::fmt::Write;
 use std::fs;
 use std::fs::File;
 
@@ -19,7 +20,7 @@ pub struct Tile {
     pub latitude: i32,
     pub longitude: i32,
     pub resolution: Resolution,
-    data: Vec<i16>,
+    pub data: Vec<i16>,
 }
 
 #[derive(Debug)]
@@ -27,6 +28,20 @@ pub enum Error {
     ParseLatLong,
     Filesize,
     Read,
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        match self {
+            Error::Read => f.write_str("read error"),
+            Error::Filesize => f.write_str("filesize error"),
+            Error::ParseLatLong => f.write_str("lat lng parse error"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+
 }
 
 impl Tile {
@@ -49,6 +64,14 @@ impl Tile {
         Ok(tile)
     }
 
+    pub fn from_reader<R: Read>(path: &Path, file_size: u64, reader: R) -> Result<Tile, Error> {
+        let (lat, lng) = get_lat_long(&path)?;
+        let res = get_resolution_from_file_size(file_size).ok_or(Error::Filesize)?;
+        let mut tile = Tile::new_empty(lat, lng, res);
+        tile.data = parse(reader, tile.resolution).map_err(|_| Error::Read)?;
+        Ok(tile)
+    }
+
     pub fn extent(&self) -> u32 {
         match self.resolution {
             Resolution::SRTM1 => 3601,
@@ -64,6 +87,14 @@ impl Tile {
         self.data[self.idx(x, y)]
     }
 
+    pub fn num_rows(&self) -> u32 {
+        self.data.len() as u32 / self.extent()
+    }
+
+    pub fn num_cols(&self) -> u32 {
+        self.extent()
+    }
+
     fn idx(&self, x: u32, y: u32) -> usize {
         assert!(x < self.extent() && y < self.extent());
         (y * self.extent() + x) as usize
@@ -71,12 +102,15 @@ impl Tile {
 }
 
 fn get_resolution<P: AsRef<Path>>(path: P) -> Option<Resolution> {
-    let from_metadata = |m: fs::Metadata| match m.len() {
+    fs::metadata(path).ok().and_then(|m| get_resolution_from_file_size(m.len()))
+}
+
+fn get_resolution_from_file_size(file_size: u64) -> Option<Resolution> {
+    match file_size {
         25934402 => Some(Resolution::SRTM1),
         2884802 => Some(Resolution::SRTM3),
         _ => None,
-    };
-    fs::metadata(path).ok().and_then(from_metadata)
+    }
 }
 
 // FIXME Better error handling.
